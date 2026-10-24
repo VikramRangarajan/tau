@@ -1808,6 +1808,96 @@ async def test_transcript_markdown_paragraphs_keep_bottom_margin() -> None:
     assert paragraph_gap == 2
 
 
+@pytest.mark.anyio
+async def test_whitespace_only_assistant_blocks_leave_no_transcript_row() -> None:
+    """A blank text block must not become an empty row between tool calls."""
+    app = TauTuiApp(
+        FakeSession(
+            messages=(
+                AssistantMessage(
+                    content=[
+                        TextContent(text="\n\n"),
+                        ToolCall(id="r1", name="read", arguments={"path": "a.py", "offset": 30}),
+                    ]
+                ),
+                ToolResultMessage(tool_call_id="r1", tool_name="read", content="line 30"),
+                AssistantMessage(
+                    content=[
+                        TextContent(text="\n\n"),
+                        ToolCall(id="r2", name="read", arguments={"path": "a.py", "offset": 240}),
+                    ]
+                ),
+                ToolResultMessage(tool_call_id="r2", tool_name="read", content="line 240"),
+            )
+        )
+    )
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+
+        rows = [
+            widget
+            for widget in app.query(TranscriptMessageWidget)
+            if widget.item.role in {"assistant", "tool"}
+        ]
+        row_gap = rows[1].region.y - rows[0].region.y
+        row_height = rows[0].region.height
+
+    assert [item.role for item in app.state.items] == ["tool", "tool"]
+    assert [widget.item.role for widget in rows] == ["tool", "tool"]
+    # One blank row between the tool rows, not three.
+    assert row_gap == row_height + 1
+
+
+@pytest.mark.anyio
+async def test_whitespace_only_streamed_text_leaves_no_blank_block() -> None:
+    """Streamed blank text must not leave a provisional widget behind."""
+    partial = AssistantMessage()
+    session = FakeSession(
+        events=[
+            AgentStartEvent(),
+            MessageStartEvent(message=partial),
+            MessageUpdateEvent(
+                message=partial,
+                assistant_message_event=TextDeltaEvent(
+                    content_index=0, delta="\n\n", partial=partial
+                ),
+            ),
+            MessageEndEvent(
+                message=AssistantMessage(
+                    content=[
+                        TextContent(text="\n\n"),
+                        ToolCall(id="read-1", name="read", arguments={"path": "a.py"}),
+                    ]
+                )
+            ),
+            ToolExecutionStartEvent(tool_call_id="read-1", tool_name="read", args={"path": "a.py"}),
+            ToolExecutionEndEvent(
+                tool_call_id="read-1",
+                tool_name="read",
+                result=AgentToolResult(content="data"),
+                is_error=False,
+            ),
+            AgentEndEvent(),
+            SessionAgentEndEvent(),
+        ]
+    )
+    app = TauTuiApp(session)
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await app._run_prompt("stream")
+        await pilot.pause()
+
+        rows = [
+            widget
+            for widget in app.query(TranscriptMessageWidget)
+            if widget.item.role in {"assistant", "tool"}
+        ]
+
+    assert [item.role for item in app.state.items] == ["tool"]
+    assert [widget.item.role for widget in rows] == ["tool"]
+
+
 def test_system_prompt_markdown_highlights_markup_tags_as_inline_code() -> None:
     prompt = (
         '<project_instructions path="/workspace/AGENTS.md">\nUse `rg`.\n</project_instructions>'

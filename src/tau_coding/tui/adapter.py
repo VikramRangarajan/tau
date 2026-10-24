@@ -21,7 +21,11 @@ from tau_coding.events import (
     SessionAgentEndEvent,
 )
 from tau_coding.session import is_context_overflow_error
-from tau_coding.tui.state import TuiState, _is_file_mutation_only_message
+from tau_coding.tui.state import (
+    TuiState,
+    _is_file_mutation_only_message,
+    has_visible_assistant_text,
+)
 
 
 class TuiEventAdapter:
@@ -152,6 +156,8 @@ class TuiEventAdapter:
             self.state.add_item("status", f"… {event.error_message}")
 
     def _flush(self) -> None:
-        if self.state.assistant_buffer:
+        # A whitespace-only buffer would project a zero-height item that still
+        # carries block margins, so it is dropped rather than rendered.
+        if has_visible_assistant_text(self.state.assistant_buffer):
             self.state.add_item("assistant", self.state.assistant_buffer)
-            self.state.assistant_buffer = ""
+        self.state.assistant_buffer = ""

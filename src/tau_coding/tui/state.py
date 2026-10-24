@@ -694,7 +694,7 @@ class TuiState:
                 if block.thinking:
                     self.add_item("thinking", block.thinking)
             elif isinstance(block, TextContent):
-                if block.text:
+                if has_visible_assistant_text(block.text):
                     self.add_item("assistant", block.text)
             elif include_tool_calls:
                 self.add_tool_call(
@@ -729,6 +729,18 @@ class TuiState:
             names.setdefault(_normalized_path(skill.path), skill.name)
         self._skill_names_by_path = (self.skills, names)
         return names
+
+
+def has_visible_assistant_text(text: str) -> bool:
+    """Return whether an assistant text block renders transcript content.
+
+    Providers routinely emit whitespace-only text blocks (a bare ``"\\n\\n"``)
+    around tool calls. Projecting one as an item creates a zero-height row that
+    still contributes its block margins, doubling the gap between adjacent tool
+    rows, so blank text blocks are dropped from display state and from the
+    streaming transcript's canonical-block projection.
+    """
+    return bool(text.strip())
 
 
 def _is_file_mutation_only_message(message: AssistantMessage) -> bool:
