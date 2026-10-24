@@ -39,16 +39,20 @@ BATCHABLE_TOOL_NAMES = frozenset({"bash", "edit", "read", "write"})
 GROUPABLE_FILE_TOOL_NAMES = frozenset({"edit", "read", "write"})
 # Tools whose same-tool runs continue across tool-only messages. Consecutive
 # narration-free steps read better as one block than as one block per call.
-# Reads are excluded deliberately: a grouped read run collapses to a path list
-# that never shows the file contents the user opened the transcript for (see
-# `test_tui_state_does_not_group_reads_from_different_assistant_messages`).
+# Reads take part too, which is only safe because they are resultful groups
+# below: expanding a read run shows each member's previewed result rather than
+# a path list that hides the file contents the user opened the transcript for.
 # Edit/write runs additionally continue through the file-mutation rule below.
-CONTINUABLE_TOOL_NAMES = frozenset({"bash", "edit", "write"})
+CONTINUABLE_TOOL_NAMES = frozenset({"bash", "edit", "read", "write"})
 # A continued tool run grows inside one mounted item, which the transcript's
 # item window cannot page out and which is re-rendered on every append, so a
 # long run starts a fresh block instead of growing without bound.
 TOOL_RUN_ROW_LIMIT = 8
-RESULTFUL_FILE_GROUP_NAMES = frozenset({"edit", "write"})
+RESULTFUL_FILE_GROUP_NAMES = frozenset({"edit", "read", "write"})
+# File tools whose chains continue through the older mutation-only rule. That
+# rule is stricter than `CONTINUABLE_TOOL_NAMES` (the message must hold nothing
+# but the calls), so it stays scoped to the tools it was written for.
+MUTATION_FILE_TOOL_NAMES = frozenset({"edit", "write"})
 
 
 @dataclass(slots=True)
@@ -334,7 +338,7 @@ class TuiState:
         if (
             not allowed
             or batch_id is None
-            or tool_call.name not in RESULTFUL_FILE_GROUP_NAMES
+            or tool_call.name not in MUTATION_FILE_TOOL_NAMES
             or not self.items
         ):
             return False
@@ -526,6 +530,8 @@ class TuiState:
             path = _string_argument(member.tool_arguments, "path") or "[unknown path]"
             if action in {"read", "edit"}:
                 path = _display_tool_path(path, self.cwd)
+            if action == "read" and path != "[unknown path]":
+                path = f"{path}{_read_line_suffix(member.tool_arguments)}"
             paths.append(path)
         path_list = "\n".join(f"  - {path}" for path in paths)
         all_complete = len(completed) == len(members)
@@ -829,7 +835,7 @@ def _is_file_mutation_only_message(message: AssistantMessage) -> bool:
         bool(calls)
         and len(calls) == len(message.content)
         and all(
-            call.name == calls[0].name and call.name in RESULTFUL_FILE_GROUP_NAMES for call in calls
+            call.name == calls[0].name and call.name in MUTATION_FILE_TOOL_NAMES for call in calls
         )
     )
 

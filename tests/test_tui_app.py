@@ -1817,10 +1817,10 @@ async def test_whitespace_only_assistant_blocks_leave_no_transcript_row() -> Non
                 AssistantMessage(
                     content=[
                         TextContent(text="\n\n"),
-                        ToolCall(id="r1", name="read", arguments={"path": "a.py", "offset": 30}),
+                        ToolCall(id="b1", name="bash", arguments={"command": "pytest -q"}),
                     ]
                 ),
-                ToolResultMessage(tool_call_id="r1", tool_name="read", content="line 30"),
+                ToolResultMessage(tool_call_id="b1", tool_name="bash", content="1 passed"),
                 AssistantMessage(
                     content=[
                         TextContent(text="\n\n"),
@@ -2021,6 +2021,50 @@ async def test_sequential_edits_share_one_file_row() -> None:
     assert len(rows) == 1
     assert rows[0].item.grouped_tool_calls is not None
     assert rows[0].selection_text == "→ Edited 2 files\n  - a.py\n  - b.py"
+
+
+@pytest.mark.anyio
+async def test_sequential_reads_share_one_file_row() -> None:
+    """Read runs continue across tool-only messages, keeping their line ranges."""
+    app = TauTuiApp(
+        FakeSession(
+            messages=(
+                AssistantMessage(
+                    content=[
+                        TextContent(text="\n\n"),
+                        ToolCall(
+                            id="r1",
+                            name="read",
+                            arguments={"path": "state.py", "offset": 30, "limit": 130},
+                        ),
+                    ]
+                ),
+                ToolResultMessage(tool_call_id="r1", tool_name="read", content="part one"),
+                AssistantMessage(
+                    content=[
+                        TextContent(text="\n\n"),
+                        ToolCall(
+                            id="r2",
+                            name="read",
+                            arguments={"path": "state.py", "offset": 240, "limit": 260},
+                        ),
+                    ]
+                ),
+                ToolResultMessage(tool_call_id="r2", tool_name="read", content="part two"),
+            )
+        )
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        rows = [
+            widget for widget in app.query(TranscriptMessageWidget) if widget.item.role == "tool"
+        ]
+
+    assert len(rows) == 1
+    assert rows[0].item.grouped_tool_calls is not None
+    assert rows[0].selection_text == ("→ Read 2 files\n  - state.py:30-159\n  - state.py:240-499")
 
 
 @pytest.mark.anyio
@@ -2741,9 +2785,10 @@ async def test_batched_reads_share_one_live_transcript_row() -> None:
 
         await pilot.press("ctrl+o")
         await pilot.pause()
-        assert tool_widgets[0].selection_text == "→ read a.py\n→ read b.py"
-        assert "one" not in tool_widgets[0].selection_text
-        assert "two" not in tool_widgets[0].selection_text
+        # Expanding a read run shows the previewed result of each member.
+        assert tool_widgets[0].selection_text == (
+            "→ read a.py\n\n✓ read\none\n\n→ read b.py\n\n✓ read\ntwo"
+        )
 
 
 @pytest.mark.anyio
@@ -2787,11 +2832,10 @@ async def test_mixed_tool_batch_uses_one_widget_and_expands_each_row() -> None:
 
         assert widget.selection_text == (
             "→ Doing thing one\n$ echo one\n\n✓ bash\none\n\n"
-            "→ read a.py\n→ read b.py\n\n"
+            "→ read a.py\n\n✓ read\nalpha\n\n"
+            "→ read b.py\n\n✓ read\nbeta\n\n"
             "→ Doing thing two\n$ echo two\n\n✓ bash\ntwo"
         )
-        assert "alpha" not in widget.selection_text
-        assert "beta" not in widget.selection_text
 
 
 @pytest.mark.anyio
