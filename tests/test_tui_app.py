@@ -1850,6 +1850,277 @@ async def test_whitespace_only_assistant_blocks_leave_no_transcript_row() -> Non
 
 
 @pytest.mark.anyio
+async def test_sequential_bash_calls_share_one_transcript_row() -> None:
+    """Bash calls from consecutive tool-only messages read as one run."""
+    app = TauTuiApp(
+        FakeSession(
+            messages=(
+                AssistantMessage(
+                    content=[ToolCall(id="b1", name="bash", arguments={"command": "pytest -q"})]
+                ),
+                ToolResultMessage(tool_call_id="b1", tool_name="bash", content="1 passed"),
+                AssistantMessage(
+                    content=[
+                        TextContent(text="\n\n"),
+                        ToolCall(id="b2", name="bash", arguments={"command": "git status"}),
+                    ]
+                ),
+                ToolResultMessage(tool_call_id="b2", tool_name="bash", content="clean"),
+            )
+        )
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        rows = [
+            widget for widget in app.query(TranscriptMessageWidget) if widget.item.role == "tool"
+        ]
+
+    assert len(rows) == 1
+    assert len(rows[0].item.tool_batch_items or []) == 2
+
+
+@pytest.mark.anyio
+async def test_thinking_between_tool_calls_keeps_separate_rows() -> None:
+    """A thinking block ends the run: the transcript keeps block order."""
+    app = TauTuiApp(
+        FakeSession(
+            messages=(
+                AssistantMessage(
+                    content=[ToolCall(id="b1", name="bash", arguments={"command": "pytest -q"})]
+                ),
+                ToolResultMessage(tool_call_id="b1", tool_name="bash", content="1 passed"),
+                AssistantMessage(
+                    content=[
+                        ThinkingContent(thinking="now check git"),
+                        ToolCall(id="b2", name="bash", arguments={"command": "git status"}),
+                    ]
+                ),
+                ToolResultMessage(tool_call_id="b2", tool_name="bash", content="clean"),
+            )
+        )
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        rows = [
+            widget
+            for widget in app.query(TranscriptMessageWidget)
+            if widget.item.role in {"tool", "thinking"}
+        ]
+
+    assert [widget.item.role for widget in rows] == ["tool", "thinking", "tool"]
+    assert all(len(widget.item.tool_batch_items or []) == 0 for widget in rows)
+
+
+@pytest.mark.anyio
+async def test_assistant_prose_between_tool_calls_keeps_separate_rows() -> None:
+    """Narrated steps stay separate blocks, in persisted order."""
+    app = TauTuiApp(
+        FakeSession(
+            messages=(
+                AssistantMessage(
+                    content=[ToolCall(id="b1", name="bash", arguments={"command": "pytest -q"})]
+                ),
+                ToolResultMessage(tool_call_id="b1", tool_name="bash", content="1 passed"),
+                AssistantMessage(
+                    content=[
+                        TextContent(text="Now check the working tree."),
+                        ToolCall(id="b2", name="bash", arguments={"command": "git status"}),
+                    ]
+                ),
+                ToolResultMessage(tool_call_id="b2", tool_name="bash", content="clean"),
+            )
+        )
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        rows = [
+            widget
+            for widget in app.query(TranscriptMessageWidget)
+            if widget.item.role in {"assistant", "tool"}
+        ]
+
+    assert [widget.item.role for widget in rows] == ["tool", "assistant", "tool"]
+
+
+@pytest.mark.anyio
+async def test_failed_tool_call_ends_the_tool_run() -> None:
+    """A failing call keeps its own block instead of disappearing into a row."""
+    app = TauTuiApp(
+        FakeSession(
+            messages=(
+                AssistantMessage(
+                    content=[ToolCall(id="b1", name="bash", arguments={"command": "pytest -q"})]
+                ),
+                ToolResultMessage(
+                    tool_call_id="b1", tool_name="bash", content="boom", is_error=True
+                ),
+                AssistantMessage(
+                    content=[ToolCall(id="b2", name="bash", arguments={"command": "git status"})]
+                ),
+                ToolResultMessage(tool_call_id="b2", tool_name="bash", content="clean"),
+            )
+        )
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        rows = [
+            widget for widget in app.query(TranscriptMessageWidget) if widget.item.role == "tool"
+        ]
+
+    assert len(rows) == 2
+    assert [len(widget.item.tool_batch_items or []) for widget in rows] == [0, 0]
+
+
+@pytest.mark.anyio
+async def test_sequential_edits_share_one_file_row() -> None:
+    """Edit runs continue across tool-only messages, results still expandable."""
+    app = TauTuiApp(
+        FakeSession(
+            messages=(
+                AssistantMessage(
+                    content=[
+                        TextContent(text="\n\n"),
+                        ToolCall(
+                            id="w1",
+                            name="edit",
+                            arguments={"path": "a.py", "oldText": "x", "newText": "y"},
+                        ),
+                    ]
+                ),
+                ToolResultMessage(tool_call_id="w1", tool_name="edit", content="patched a"),
+                AssistantMessage(
+                    content=[
+                        TextContent(text="\n\n"),
+                        ToolCall(
+                            id="w2",
+                            name="edit",
+                            arguments={"path": "b.py", "oldText": "p", "newText": "q"},
+                        ),
+                    ]
+                ),
+                ToolResultMessage(tool_call_id="w2", tool_name="edit", content="patched b"),
+            )
+        )
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        rows = [
+            widget for widget in app.query(TranscriptMessageWidget) if widget.item.role == "tool"
+        ]
+
+    assert len(rows) == 1
+    assert rows[0].item.grouped_tool_calls is not None
+    assert rows[0].selection_text == "→ Edited 2 files\n  - a.py\n  - b.py"
+
+
+@pytest.mark.anyio
+async def test_tool_run_continues_while_streaming() -> None:
+    """The streaming path groups a run the same way the restored path does."""
+    partial = AssistantMessage()
+
+    def round_events(call_id: str, command: str) -> list[AgentEvent]:
+        return [
+            MessageStartEvent(message=partial),
+            MessageUpdateEvent(
+                message=partial,
+                assistant_message_event=TextDeltaEvent(
+                    content_index=0, delta="\n\n", partial=partial
+                ),
+            ),
+            MessageEndEvent(
+                message=AssistantMessage(
+                    content=[
+                        TextContent(text="\n\n"),
+                        ToolCall(id=call_id, name="bash", arguments={"command": command}),
+                    ]
+                )
+            ),
+            ToolExecutionStartEvent(
+                tool_call_id=call_id, tool_name="bash", args={"command": command}
+            ),
+            ToolExecutionEndEvent(
+                tool_call_id=call_id,
+                tool_name="bash",
+                result=AgentToolResult(content="ok"),
+                is_error=False,
+            ),
+        ]
+
+    app = TauTuiApp(
+        FakeSession(
+            events=[
+                AgentStartEvent(),
+                *round_events("b1", "pytest -q"),
+                *round_events("b2", "git status"),
+                AgentEndEvent(),
+                SessionAgentEndEvent(),
+            ]
+        )
+    )
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await app._run_prompt("stream")
+        await pilot.pause()
+
+        rows = [
+            widget for widget in app.query(TranscriptMessageWidget) if widget.item.role == "tool"
+        ]
+
+    assert len(rows) == 1
+    assert len(rows[0].item.tool_batch_items or []) == 2
+
+
+@pytest.mark.anyio
+async def test_tool_run_stops_at_the_row_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A long run starts a fresh block rather than growing without bound."""
+    monkeypatch.setattr("tau_coding.tui.state.TOOL_RUN_ROW_LIMIT", 2)
+    messages: list[AssistantMessage | ToolResultMessage] = []
+    for index in range(3):
+        messages.append(
+            AssistantMessage(
+                content=[
+                    ToolCall(id=f"b{index}", name="bash", arguments={"command": f"cmd {index}"})
+                ]
+            )
+        )
+        messages.append(ToolResultMessage(tool_call_id=f"b{index}", tool_name="bash", content="ok"))
+    app = TauTuiApp(FakeSession(messages=tuple(messages)))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        rows = [
+            widget for widget in app.query(TranscriptMessageWidget) if widget.item.role == "tool"
+        ]
+
+    assert [len(widget.item.tool_batch_items or []) for widget in rows] == [2, 0]
+
+
+def test_tool_run_does_not_absorb_always_visible_rows() -> None:
+    """Typed terminal rows keep their own block; their output is always shown."""
+    state = TuiState()
+    state.add_item("tool", "$ ls", always_show_tool_result=True)
+
+    state.add_tool_call(
+        ToolCall(id="b1", name="bash", arguments={"command": "ls"}),
+        allows_tool_continuation=True,
+    )
+
+    assert len(state.items) == 2
+    assert state.items[-1].tool_batch_items is None
+
+
+@pytest.mark.anyio
 async def test_whitespace_only_streamed_text_leaves_no_blank_block() -> None:
     """Streamed blank text must not leave a provisional widget behind."""
     partial = AssistantMessage()
