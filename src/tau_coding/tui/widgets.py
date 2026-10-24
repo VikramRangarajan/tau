@@ -628,7 +628,7 @@ class TranscriptMessageWidget(Horizontal):
     TranscriptMessageWidget {
         width: 1fr;
         height: auto;
-        margin: 1 1 2 0;
+        margin: 1 1 1 0;
     }
 
     TranscriptMessageWidget > .transcript-message-body {
@@ -877,7 +877,7 @@ class StreamingTranscriptMessageWidget(ThemedMarkdownWidget):
     StreamingTranscriptMessageWidget {
         width: 1fr;
         height: auto;
-        margin: 1 1 2 1;
+        margin: 1 1 1 1;
         padding: 0 1 0 0;
     }
 
