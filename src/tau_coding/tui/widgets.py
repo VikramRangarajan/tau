@@ -641,6 +641,12 @@ class TranscriptMessageWidget(Horizontal):
         margin: 0 0 1 0;
     }
 
+    /* The final paragraph reserves no trailing blank line; the widget margin
+       below already separates blocks, matching plain-body rows. */
+    TranscriptMessageWidget > .transcript-markdown-body > MarkdownParagraph:last-child {
+        margin: 0;
+    }
+
     """
 
     def __init__(
@@ -877,6 +883,12 @@ class StreamingTranscriptMessageWidget(ThemedMarkdownWidget):
 
     StreamingTranscriptMessageWidget > MarkdownParagraph {
         margin: 0 0 1 0;
+    }
+
+    /* The final paragraph reserves no trailing blank line; the widget margin
+       below already separates blocks, matching plain-body rows. */
+    StreamingTranscriptMessageWidget > MarkdownParagraph:last-child {
+        margin: 0;
     }
 
     StreamingTranscriptMessageWidget.-streaming MarkdownFence {

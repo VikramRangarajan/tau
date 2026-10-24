@@ -1790,6 +1790,7 @@ async def test_textual_markdown_widget_uses_theme_link_style() -> None:
 
 @pytest.mark.anyio
 async def test_transcript_markdown_paragraphs_keep_bottom_margin() -> None:
+    """Paragraphs stay separated, but the last one adds no trailing blank line."""
     app = TauTuiApp(
         FakeSession([AssistantMessage(content="First paragraph.\n\nSecond paragraph.")]),
     )
@@ -1798,9 +1799,13 @@ async def test_transcript_markdown_paragraphs_keep_bottom_margin() -> None:
         await pilot.pause()
 
         blocks = list(app.query(TauMarkdownBlock))
+        margins = [block.styles.margin.bottom for block in blocks]
+        # One blank row between the paragraphs, none after the final one.
+        paragraph_gap = blocks[1].region.y - blocks[0].region.y
 
     assert len(blocks) == 2
-    assert [block.styles.margin.bottom for block in blocks] == [1, 1]
+    assert margins == [1, 0]
+    assert paragraph_gap == 2
 
 
 def test_system_prompt_markdown_highlights_markup_tags_as_inline_code() -> None:
