@@ -1582,6 +1582,21 @@ class TranscriptView(VerticalScroll):
         ]
         self._hidden_thinking_placeholder_visible = False
 
+    async def discard_provisional_assistant_message(self) -> None:
+        """Drop a message's provisional widgets without touching the window.
+
+        A tool-only message streams a blank text buffer that never becomes a
+        canonical item. Removing its widgets is all that is needed; remounting
+        the window here would pull a user reading earlier output forward.
+        """
+        for widget in tuple(self._active_message_widgets):
+            if widget.parent is self:
+                await widget.remove()
+        self._active_message_widgets.clear()
+        self._active_assistant_widget = None
+        self._active_thinking_widget = None
+        self._hidden_thinking_placeholder_visible = False
+
     async def finish_structured_assistant_message(
         self,
         items: Sequence[ChatItem],

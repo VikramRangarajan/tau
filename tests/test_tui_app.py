@@ -2125,19 +2125,39 @@ async def test_tool_run_continues_while_streaming() -> None:
 
 
 @pytest.mark.anyio
-async def test_tool_run_stops_at_the_row_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A long run starts a fresh block rather than growing without bound."""
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("bash", {"command": "cmd"}),
+        ("read", {"path": "file.py"}),
+        ("edit", {"path": "file.py", "oldText": "x", "newText": "y"}),
+        ("write", {"path": "file.py", "content": "x"}),
+    ],
+)
+@pytest.mark.anyio
+async def test_tool_run_stops_at_the_row_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    tool_name: str,
+    arguments: dict[str, str],
+) -> None:
+    """A long run starts a fresh block, for file groups as well as batches."""
     monkeypatch.setattr("tau_coding.tui.state.TOOL_RUN_ROW_LIMIT", 2)
     messages: list[AssistantMessage | ToolResultMessage] = []
     for index in range(3):
+        call_arguments = {
+            key: (f"cmd {index}" if key == "command" else f"f{index}.py")
+            if key in {"command", "path"}
+            else value
+            for key, value in arguments.items()
+        }
         messages.append(
             AssistantMessage(
-                content=[
-                    ToolCall(id=f"b{index}", name="bash", arguments={"command": f"cmd {index}"})
-                ]
+                content=[ToolCall(id=f"c{index}", name=tool_name, arguments=call_arguments)]
             )
         )
-        messages.append(ToolResultMessage(tool_call_id=f"b{index}", tool_name="bash", content="ok"))
+        messages.append(
+            ToolResultMessage(tool_call_id=f"c{index}", tool_name=tool_name, content="ok")
+        )
     app = TauTuiApp(FakeSession(messages=tuple(messages)))
 
     async with app.run_test() as pilot:
@@ -2147,7 +2167,95 @@ async def test_tool_run_stops_at_the_row_limit(monkeypatch: pytest.MonkeyPatch) 
             widget for widget in app.query(TranscriptMessageWidget) if widget.item.role == "tool"
         ]
 
-    assert [len(widget.item.tool_batch_items or []) for widget in rows] == [2, 0]
+    def row_count(item: ChatItem) -> int:
+        if item.grouped_tool_calls is not None:
+            return len(item.grouped_tool_calls)
+        if item.tool_batch_items is not None:
+            return len(item.tool_batch_items)
+        return 1
+
+    assert [row_count(widget.item) for widget in rows] == [2, 1]
+
+
+@pytest.mark.anyio
+async def test_failed_edit_ends_the_tool_run() -> None:
+    """Edit runs split on failure too, matching bash and read runs."""
+    app = TauTuiApp(
+        FakeSession(
+            messages=(
+                AssistantMessage(
+                    content=[
+                        ToolCall(
+                            id="w1",
+                            name="edit",
+                            arguments={"path": "a.py", "oldText": "x", "newText": "y"},
+                        )
+                    ]
+                ),
+                ToolResultMessage(
+                    tool_call_id="w1", tool_name="edit", content="boom", is_error=True
+                ),
+                AssistantMessage(
+                    content=[
+                        ToolCall(
+                            id="w2",
+                            name="edit",
+                            arguments={"path": "b.py", "oldText": "x", "newText": "y"},
+                        )
+                    ]
+                ),
+                ToolResultMessage(tool_call_id="w2", tool_name="edit", content="patched"),
+            )
+        )
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        rows = [
+            widget for widget in app.query(TranscriptMessageWidget) if widget.item.role == "tool"
+        ]
+
+    assert len(rows) == 2
+    assert all(widget.item.grouped_tool_calls is None for widget in rows)
+
+
+@pytest.mark.anyio
+async def test_whitespace_only_thinking_keeps_the_tool_run() -> None:
+    """Blank thinking blocks are invisible: no row, no run boundary."""
+    app = TauTuiApp(
+        FakeSession(
+            messages=(
+                AssistantMessage(
+                    content=[
+                        ThinkingContent(thinking="\n\n"),
+                        ToolCall(id="b1", name="bash", arguments={"command": "pytest -q"}),
+                    ]
+                ),
+                ToolResultMessage(tool_call_id="b1", tool_name="bash", content="1 passed"),
+                AssistantMessage(
+                    content=[
+                        ThinkingContent(thinking="\n\n"),
+                        ToolCall(id="b2", name="bash", arguments={"command": "git status"}),
+                    ]
+                ),
+                ToolResultMessage(tool_call_id="b2", tool_name="bash", content="clean"),
+            )
+        )
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        rows = [
+            widget
+            for widget in app.query(TranscriptMessageWidget)
+            if widget.item.role in {"thinking", "tool"}
+        ]
+
+    assert [item.role for item in app.state.items] == ["tool"]
+    assert [widget.item.role for widget in rows] == ["tool"]
+    assert len(rows[0].item.tool_batch_items or []) == 2
 
 
 def test_tool_run_does_not_absorb_always_visible_rows() -> None:
@@ -2990,6 +3098,64 @@ async def test_long_transcript_mounts_bounded_latest_window_and_pages_earlier(
             "later",
         }
         assert len(transcript._item_widgets) == 6
+
+
+@pytest.mark.anyio
+async def test_tool_only_message_keeps_a_paged_back_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ending a tool-only message must not remount the window under the user."""
+    from tau_coding.tui import widgets as tui_widgets
+
+    monkeypatch.setattr(tui_widgets, "TRANSCRIPT_WINDOW_ITEMS", 6)
+    monkeypatch.setattr(tui_widgets, "TRANSCRIPT_WINDOW_PAGE_ITEMS", 2)
+    monkeypatch.setattr(tui_widgets, "TRANSCRIPT_WINDOW_OVERSCAN_ITEMS", 0)
+    app = TauTuiApp(
+        FakeSession(messages=[UserMessage(content=f"message {index}") for index in range(12)])
+    )
+
+    async with app.run_test(size=(60, 20)) as pilot:
+        await pilot.pause()
+        transcript = app.query_one("#transcript", TranscriptView)
+        transcript.scroll_to(y=0, animate=False, immediate=True)
+        await pilot.pause()
+        await pilot.pause()
+        window = (transcript._window_start, transcript._window_end)
+        assert window == (4, 10)
+        scroll_y = transcript.scroll_y
+        assert scroll_y > 0
+
+        # A tool-only message streams a blank buffer, then ends with a call.
+        partial = AssistantMessage()
+        for event in (
+            MessageStartEvent(message=partial),
+            MessageUpdateEvent(
+                message=partial,
+                assistant_message_event=TextDeltaEvent(
+                    content_index=0, delta="\n\n", partial=partial
+                ),
+            ),
+            MessageEndEvent(
+                message=AssistantMessage(
+                    content=[
+                        TextContent(text="\n\n"),
+                        ToolCall(id="b1", name="bash", arguments={"command": "ls"}),
+                    ]
+                )
+            ),
+        ):
+            app.adapter.apply(event)
+            await app._apply_streaming_transcript_event(event)
+        await pilot.pause()
+
+        assert (transcript._window_start, transcript._window_end) == window
+        assert transcript.scroll_y == scroll_y
+        # Still paged in the middle: the "later" sentinel proves the window did
+        # not advance to the newest items.
+        assert {boundary.direction for boundary in app.query(TranscriptWindowBoundary)} == {
+            "earlier",
+            "later",
+        }
 
 
 @pytest.mark.anyio

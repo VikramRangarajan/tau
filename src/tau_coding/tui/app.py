@@ -178,8 +178,8 @@ from tau_coding.tui.local_backends import (
 from tau_coding.tui.project_trust import ProjectTrustScreen, prompt_project_trust
 from tau_coding.tui.state import (
     TuiState,
+    assistant_block_is_visible,
     format_terminal_command_result_block,
-    has_visible_assistant_text,
 )
 from tau_coding.tui.terminal_notification import TerminalNotificationController
 from tau_coding.tui.terminal_title import TerminalTitleController
@@ -6415,20 +6415,18 @@ class TauTuiApp(App[None]):
                 visible_blocks = [
                     block
                     for block in event.message.content
-                    if (
-                        isinstance(block, TextContent)
-                        and has_visible_assistant_text(block.text)
-                        or isinstance(block, ThinkingContent)
-                        and bool(block.thinking)
-                    )
+                    if isinstance(block, TextContent | ThinkingContent)
+                    and assistant_block_is_visible(block)
                 ]
                 canonical_items = self.state.items[-len(visible_blocks) :] if visible_blocks else []
-                if (
-                    # No visible content means the message contributed nothing
-                    # but tool rows; drop its provisional streaming widgets
-                    # instead of appending a blank block.
-                    not visible_blocks
-                    or any(isinstance(block, ThinkingContent) for block in visible_blocks)
+                if not visible_blocks:
+                    # Tool-only message: it streamed a blank buffer (providers
+                    # emit "\n\n" next to calls), so drop its provisional
+                    # widgets without remounting the window, which would yank a
+                    # user who scrolled back to earlier output.
+                    await transcript.discard_provisional_assistant_message()
+                elif (
+                    any(isinstance(block, ThinkingContent) for block in visible_blocks)
                     or len(visible_blocks) > 1
                 ):
                     # Replace only this message's provisional streaming widgets;
