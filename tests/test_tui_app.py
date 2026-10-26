@@ -1809,6 +1809,35 @@ async def test_transcript_markdown_paragraphs_keep_bottom_margin() -> None:
 
 
 @pytest.mark.anyio
+async def test_collapsed_thinking_block_keeps_one_blank_line() -> None:
+    """The hidden placeholder takes one row plus the usual one-row gap."""
+    app = TauTuiApp(
+        FakeSession(
+            [
+                AssistantMessage(
+                    content=[ThinkingContent(thinking="secret plan"), TextContent(text="answer")]
+                )
+            ]
+        )
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        rows = [
+            widget
+            for widget in app.query(TranscriptMessageWidget)
+            if widget.item.role in {"thinking", "assistant"}
+        ]
+        thinking, assistant = rows
+        gap = assistant.region.y - (thinking.region.y + thinking.region.height)
+
+    assert thinking.selection_text == "Thinking… Press Ctrl+T to show thinking tokens."
+    assert [widget.item.role for widget in rows] == ["thinking", "assistant"]
+    assert gap == 1
+
+
+@pytest.mark.anyio
 async def test_whitespace_only_assistant_blocks_leave_no_transcript_row() -> None:
     """A blank text block must not become an empty row between tool calls."""
     app = TauTuiApp(
