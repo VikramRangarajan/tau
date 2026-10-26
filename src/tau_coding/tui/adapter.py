@@ -44,11 +44,13 @@ class TuiEventAdapter:
         if isinstance(event, AgentEndEvent):
             # A bare harness event is terminal for legacy/direct adapter callers.
             self._flush()
+            self._discard_pending_tool_tracking()
             self.state.running = False
             return
         if isinstance(event, SessionAgentEndEvent):
             # Session orchestration may still compact, retry, or drain queued work.
             self._flush()
+            self._discard_pending_tool_tracking()
             return
         if event.type == "agent_settled":
             self._flush()
@@ -152,6 +154,17 @@ class TuiEventAdapter:
                 self.state.items.pop()
             self.state.error = None
             self.state.add_item("status", f"… {event.error_message}")
+
+    def _discard_pending_tool_tracking(self) -> None:
+        """Drop per-call bookkeeping for calls that never started executing.
+
+        A turn that fails between its message end and a call's execution start
+        would otherwise leave its batch id and continuation flag behind for the
+        lifetime of the session. Tool calls always follow their own message end,
+        so nothing pending at a turn end can still apply.
+        """
+        self._tool_batch_ids.clear()
+        self._tool_continuation_calls.clear()
 
     def _flush(self) -> None:
         # A whitespace-only buffer would project a zero-height item that still
