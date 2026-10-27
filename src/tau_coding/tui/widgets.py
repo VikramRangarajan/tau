@@ -1583,7 +1583,7 @@ class TranscriptView(VerticalScroll):
         self._hidden_thinking_placeholder_visible = False
 
     async def discard_provisional_assistant_message(self) -> None:
-        """Drop a message's provisional widgets without touching the window.
+        """Drop a message's provisional widgets without remounting the window.
 
         A tool-only message streams a blank text buffer that never becomes a
         canonical item. Removing its widgets is all that is needed; remounting
@@ -1596,6 +1596,11 @@ class TranscriptView(VerticalScroll):
         self._active_assistant_widget = None
         self._active_thinking_widget = None
         self._hidden_thinking_placeholder_visible = False
+        # The adapter deleted this message's provisional items, so stop counting
+        # them in the window even though nothing is remounted here.
+        state = self._render_state
+        if state is not None:
+            self._window_end = min(self._window_end, len(state.items))
 
     async def finish_structured_assistant_message(
         self,

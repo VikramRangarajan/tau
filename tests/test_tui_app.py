@@ -3188,6 +3188,44 @@ async def test_tool_only_message_keeps_a_paged_back_window(
 
 
 @pytest.mark.anyio
+async def test_tool_only_message_discard_keeps_window_end_within_items() -> None:
+    """Discarding a tool-only message's provisional thinking keeps the window exact."""
+    app = TauTuiApp(FakeSession(messages=[UserMessage(content="hi")]))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        transcript = app.query_one("#transcript", TranscriptView)
+
+        # A tool-only message streams a whitespace-only thinking fragment, then
+        # ends with a call and no visible blocks.
+        partial = AssistantMessage()
+        for event in (
+            MessageStartEvent(message=partial),
+            MessageUpdateEvent(
+                message=partial,
+                assistant_message_event=ThinkingDeltaEvent(
+                    content_index=0, delta="\n\n", partial=partial
+                ),
+            ),
+            MessageEndEvent(
+                message=AssistantMessage(
+                    content=[
+                        ThinkingContent(thinking="\n\n"),
+                        ToolCall(id="b1", name="bash", arguments={"command": "ls"}),
+                    ]
+                )
+            ),
+        ):
+            app.adapter.apply(event)
+            await app._apply_streaming_transcript_event(event)
+        await pilot.pause()
+
+        # The provisional thinking item is deleted at MessageEnd, so the window
+        # end must not keep counting it.
+        assert transcript._window_end == len(app.state.items)
+
+
+@pytest.mark.anyio
 async def test_long_transcript_incremental_appends_keep_mounted_window_bounded() -> None:
     initial_count = TRANSCRIPT_WINDOW_ITEMS + TRANSCRIPT_WINDOW_OVERSCAN_ITEMS
     app = TauTuiApp(

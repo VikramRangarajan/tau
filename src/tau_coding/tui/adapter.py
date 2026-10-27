@@ -53,7 +53,10 @@ class TuiEventAdapter:
             self._discard_pending_tool_tracking()
             return
         if event.type == "agent_settled":
+            # Terminal for one started run, including runs that raised before
+            # AgentEnd, so pending per-call tracking is stale here too.
             self._flush()
+            self._discard_pending_tool_tracking()
             if self._pending_overflow_error is not None:
                 self.state.add_assistant_error(self._pending_overflow_error)
                 self._pending_overflow_error = None

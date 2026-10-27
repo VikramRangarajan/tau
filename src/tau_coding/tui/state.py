@@ -35,8 +35,6 @@ TERMINAL_COMMAND_OUTPUT_PREVIEW_LINES = 120
 # Show live elapsed time on an executing tool row once it stops being instant;
 # quick reads/edits never flash a "(0s)".
 TOOL_TIMER_MIN_SECONDS = 1.0
-BATCHABLE_TOOL_NAMES = frozenset({"bash", "edit", "read", "write"})
-GROUPABLE_FILE_TOOL_NAMES = frozenset({"edit", "read", "write"})
 # Tools whose same-tool runs continue across tool-only messages, and whose
 # calls batch within one message. Consecutive narration-free steps read better
 # as one block than as one block per call. Every tool takes part, which is only
